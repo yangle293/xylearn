@@ -13,8 +13,8 @@ T = tensor
 from theano.tensor import nnet
 
 # Local imports
-from pylearn2.base import Block, StackedBlocks
-from pylearn2.utils import as_floatX, safe_update, sharedX
+from base import Block, StackedBlocks
+
 from pylearn2.models import Model
 from pylearn2.optimizer import SGDOptimizer
 from pylearn2.expr.basic import theano_norms
