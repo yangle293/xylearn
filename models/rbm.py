@@ -15,6 +15,10 @@ from theano.tensor import nnet
 # Local imports
 from base import Block, StackedBlocks
 from xylearn.utils import toFloatX, toSharedX, safeUpdate
+
+
+
+
 from pylearn2.models import Model
 from pylearn2.optimizer import SGDOptimizer
 from pylearn2.expr.basic import theano_norms
@@ -61,7 +65,7 @@ def training_updates(visible_batch, model, sampler, optimizer):
     grads = model.ml_gradients(pos_v, neg_v)
     # Build updates dictionary combining (gradient, sampler) updates.
     ups = optimizer.updates(gradients=grads)
-    safe_update(ups, sampler_updates)
+    safeUpdate(ups, sampler_updates)
     return ups
 
 
