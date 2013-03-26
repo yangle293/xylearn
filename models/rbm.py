@@ -5,27 +5,27 @@ strategies.
 
 # Third-party imports
 import numpy
+
 N = numpy
 np = numpy
 import theano
 from theano import tensor
+
 T = tensor
 from theano.tensor import nnet
 
 # Local imports
-from base import Block, StackedBlocks
-from xylearn.utils import toFloatX, toSharedX, safeUpdate
+from xylearn.utils import toFloatX, toSharedX, safeUpdate, safeUnion
+from xylearn.models.baseStructure import Block, StackedBlocks
+from xylearn.models.baseModel import baseModel
+
+from xylearn.optimizers.SGDOptimizer import SGDOptimizer
+
+from xylearn.expr.theanoEXPR import inverse_sigmoid
 
 
-
-
-from pylearn2.models import Model
-from pylearn2.optimizer import SGDOptimizer
-from pylearn2.expr.basic import theano_norms
-from pylearn2.expr.nnet import inverse_sigmoid_numpy
-from pylearn2.linear.matrixmul import MatrixMul
 from pylearn2.space import VectorSpace
-from pylearn2.utils import safe_union
+
 theano.config.warn.sum_div_dimshuffle_bug = False
 
 if 0:
@@ -33,6 +33,7 @@ if 0:
     RandomStreams = tensor.shared_randomstreams.RandomStreams
 else:
     import theano.sandbox.rng_mrg
+
     RandomStreams = theano.sandbox.rng_mrg.MRG_RandomStreams
 
 
@@ -75,6 +76,7 @@ class Sampler(object):
     an RBM, which may include retaining state e.g. the negative particles for
     Persistent Contrastive Divergence.
     """
+
     def __init__(self, rbm, particles, rng):
         """
         Construct a Sampler.
@@ -128,6 +130,7 @@ class BlockGibbsSampler(Sampler):
        International Conference on Machine Learning, Helsinki, Finland,
        2008. http://www.cs.toronto.edu/~tijmen/pcd/pcd.pdf
     """
+
     def __init__(self, rbm, particles, rng, steps=1, particles_clip=None):
         """
         Construct a BlockGibbsSampler.
@@ -194,6 +197,7 @@ class BlockGibbsSampler(Sampler):
             self.rbm.h_sample: _locals['h_mean']
         }
 
+
 class PersistentCDSampler(Sampler):
     """
         Implements a persistent Markov chain for use with Persistent Contrastive
@@ -204,6 +208,7 @@ class PersistentCDSampler(Sampler):
         International Conference on Machine Learning, Helsinki, Finland,
         2008. http://www.cs.toronto.edu/~tijmen/pcd/pcd.pdf
         """
+
     def __init__(self, rbm, particles, rng, steps=1, particles_clip=None):
         """
             Construct a PersistentCDSampler.
@@ -270,21 +275,22 @@ class PersistentCDSampler(Sampler):
         }
 
 
-
-class RBM(Block, Model):
+class RBM(Block, baseModel):
     """
     A base interface for RBMs, implementing the binary-binary case.
 
     """
-    def __init__(self, nvis = None, nhid = None,
-                 vis_space = None,
-                 hid_space = None,
-                 transformer = None,
-                 irange=0.5, rng=None, init_bias_vis = None,
-                 init_bias_vis_marginals = None, init_bias_hid=0.0,
-                 base_lr = 1e-3, anneal_start = None, nchains = 100, sml_gibbs_steps = 1,
-                 random_patches_src = None,
-                 monitor_reconstruction = False):
+
+    def __init__(self,
+                 nvis=None, nhid=None,
+                 vis_space=None,
+                 hid_space=None,
+                 transformer=None,
+                 irange=0.5, rng=None, init_bias_vis=None,
+                 init_bias_vis_marginals=None, init_bias_hid=0.0,
+                 base_lr=1e-3,
+                 anneal_start=None, nchains=100, sml_gibbs_steps=1,
+                 random_patches_src=None):
 
         """
         Construct an RBM object.
@@ -316,10 +322,6 @@ class RBM(Block, Model):
             Initial value of the visible biases, broadcasted as necessary.
         init_bias_hid : array_like, optional
             initial value of the hidden biases, broadcasted as necessary.
-        monitor_reconstruction : if True, will request a monitoring channel to monitor
-            reconstruction error
-        random_patches_src: Either None, or a Dataset from which to draw random patches
-            in order to initialize the weights. Patches will be multiplied by irange
 
         Parameters for default SML learning rule:
 
@@ -330,8 +332,8 @@ class RBM(Block, Model):
 
         """
 
-        Model.__init__(self)
         Block.__init__(self)
+        baseModel.__init__(self)
 
         if init_bias_vis_marginals is not None:
             assert init_bias_vis is None
@@ -342,8 +344,7 @@ class RBM(Block, Model):
             marginals = X.mean(axis=0)
 
             #rescale the marginals a bit to avoid NaNs
-            init_bias_vis = inverse_sigmoid_numpy(.01 + .98 * marginals)
-
+            init_bias_vis = inverse_sigmoid(.01 + .98 * marginals)
 
         if init_bias_vis is None:
             init_bias_vis = 0.0
@@ -357,43 +358,18 @@ class RBM(Block, Model):
             #if we don't specify things in terms of spaces and a transformer,
             #assume dense matrix multiplication and work off of nvis, nhid
             assert hid_space is None
-            assert transformer is None or isinstance(transformer,MatrixMul)
             assert nvis is not None
             assert nhid is not None
-
-            if transformer is None:
-                if random_patches_src is None:
-                    W = rng.uniform(-irange, irange, (nvis, nhid))
-                else:
-                    if hasattr(random_patches_src, '__array__'):
-                        W = irange * random_patches_src.T
-                        assert W.shape == (nvis, nhid)
-                    else:
-                        #assert type(irange) == type(0.01)
-                        #assert irange == 0.01
-                        W = irange * random_patches_src.get_batch_design(nhid).T
-
-                self.transformer = MatrixMul(  toSharedX(
-                    W,
-                    name='W',
-                    borrow=True
-                )
-                )
-            else:
-                self.transformer = transformer
 
             self.vis_space = VectorSpace(nvis)
             self.hid_space = VectorSpace(nhid)
         else:
             assert hid_space is not None
-            assert transformer is not None
             assert nvis is None
             assert nhid is None
 
             self.vis_space = vis_space
             self.hid_space = hid_space
-            self.transformer = transformer
-
 
         try:
             b_vis = self.vis_space.get_origin()
@@ -412,9 +388,8 @@ class RBM(Block, Model):
         self.random_patches_src = random_patches_src
         self.register_names_to_del(['random_patches_src'])
 
-
         self.__dict__.update(nhid=nhid, nvis=nvis)
-        self._params = safe_union(self.transformer.get_params(), [self.bias_vis, self.bias_hid])
+        self._params = safeUnion(transformer.get_params(), [self.bias_vis, self.bias_hid])
 
         self.base_lr = base_lr
         self.anneal_start = anneal_start
@@ -423,12 +398,12 @@ class RBM(Block, Model):
 
     def get_input_dim(self):
         if not isinstance(self.vis_space, VectorSpace):
-            raise TypeError("Can't describe "+str(type(self.vis_space))+" as a dimensionality number.")
+            raise TypeError("Can't describe " + str(type(self.vis_space)) + " as a dimensionality number.")
         return self.vis_space.dim
 
     def get_output_dim(self):
         if not isinstance(self.hid_space, VectorSpace):
-            raise TypeError("Can't describe "+str(type(self.hid_space))+" as a dimensionality number.")
+            raise TypeError("Can't describe " + str(type(self.hid_space)) + " as a dimensionality number.")
         return self.hid_space.dim
 
     def get_input_space(self):
@@ -442,7 +417,7 @@ class RBM(Block, Model):
 
     def get_weights(self, borrow=False):
 
-        weights ,= self.transformer.get_params()
+        weights, = self.transformer.get_params()
 
         return weights.get_value(borrow=borrow)
 
@@ -453,7 +428,7 @@ class RBM(Block, Model):
         return ['v', 'h']
 
 
-    def get_monitoring_channels(self, V, Y = None):
+    def get_monitoring_channels(self, V, Y=None):
 
         theano_rng = RandomStreams(42)
 
@@ -465,21 +440,21 @@ class RBM(Block, Model):
 
         h = H.mean(axis=0)
 
-        return { 'bias_hid_min' : T.min(self.bias_hid),
-                 'bias_hid_mean' : T.mean(self.bias_hid),
-                 'bias_hid_max' : T.max(self.bias_hid),
-                 'bias_vis_min' : T.min(self.bias_vis),
-                 'bias_vis_mean' : T.mean(self.bias_vis),
-                 'bias_vis_max': T.max(self.bias_vis),
-                 'h_min' : T.min(h),
-                 'h_mean': T.mean(h),
-                 'h_max' : T.max(h),
-                 #'W_min' : T.min(self.weights),
-                 #'W_max' : T.max(self.weights),
-                 #'W_norms_min' : T.min(norms),
-                 #'W_norms_max' : T.max(norms),
-                 #'W_norms_mean' : T.mean(norms),
-                 'reconstruction_error' : self.reconstruction_error(V, theano_rng) }
+        return {'bias_hid_min': T.min(self.bias_hid),
+                'bias_hid_mean': T.mean(self.bias_hid),
+                'bias_hid_max': T.max(self.bias_hid),
+                'bias_vis_min': T.min(self.bias_vis),
+                'bias_vis_mean': T.mean(self.bias_vis),
+                'bias_vis_max': T.max(self.bias_vis),
+                'h_min': T.min(h),
+                'h_mean': T.mean(h),
+                'h_max': T.max(h),
+                #'W_min' : T.min(self.weights),
+                #'W_max' : T.max(self.weights),
+                #'W_norms_min' : T.min(norms),
+                #'W_norms_max' : T.max(norms),
+                #'W_norms_mean' : T.mean(norms),
+                'reconstruction_error': self.reconstruction_error(V, theano_rng)}
 
     def ml_gradients(self, pos_v, neg_v):
         """
@@ -533,7 +508,7 @@ class RBM(Block, Model):
         if not hasattr(self, 'learn_func'):
             self.redo_theano()
 
-        rval =  self.learn_func(X)
+        rval = self.learn_func(X)
 
         return rval
 
@@ -547,8 +522,7 @@ class RBM(Block, Model):
         optimizer = SGDOptimizer(self, self.base_lr, self.anneal_start)
 
         sampler = sampler = BlockGibbsSampler(self, 0.5 + np.zeros((self.nchains, self.get_input_dim())), self.rng,
-                                              steps= self.sml_gibbs_steps)
-
+                                              steps=self.sml_gibbs_steps)
 
         updates = training_updates(visible_batch=minibatch, model=self,
                                    sampler=sampler, optimizer=optimizer)
@@ -596,7 +570,7 @@ class RBM(Block, Model):
         # For binary hidden units
         # TODO: factor further to extend to other kinds of hidden units
         #       (e.g. spike-and-slab)
-        h_sample = rng.binomial(size = h_mean.shape, n = 1 , p = h_mean, dtype=h_mean.type.dtype)
+        h_sample = rng.binomial(size=h_mean.shape, n=1, p=h_mean, dtype=h_mean.type.dtype)
         assert h_sample.type.dtype == v.type.dtype
         # v_mean is always based on h_sample, not h_mean, because we don't
         # want h transmitting more than one bit of information per unit.
@@ -817,16 +791,17 @@ class GaussianBinaryRBM(RBM):
     """
     An RBM with Gaussian visible units and binary hidden units.
     """
+
     def __init__(self, energy_function_class,
-                 nvis = None,
-                 nhid = None,
-                 vis_space = None,
-                 hid_space = None,
-                 transformer = None,
+                 nvis=None,
+                 nhid=None,
+                 vis_space=None,
+                 hid_space=None,
+                 transformer=None,
                  irange=0.5, rng=None,
                  mean_vis=False, init_sigma=2., learn_sigma=False,
                  sigma_lr_scale=1., init_bias_hid=0.0,
-                 min_sigma = .1, max_sigma = 10.):
+                 min_sigma=.1, max_sigma=10.):
         """
         Allocate a GaussianBinaryRBM object.
 
@@ -852,12 +827,12 @@ class GaussianBinaryRBM(RBM):
         init_bias_hid : scalar or 1-d array of length `nhid`
             Initial value for the biases on hidden units.
         """
-        super(GaussianBinaryRBM, self).__init__(nvis = nvis, nhid = nhid,
-                                                transformer = transformer,
-                                                vis_space = vis_space,
-                                                hid_space = hid_space,
-                                                irange = irange, rng = rng,
-                                                init_bias_hid = init_bias_hid)
+        super(GaussianBinaryRBM, self).__init__(nvis=nvis, nhid=nhid,
+                                                transformer=transformer,
+                                                vis_space=vis_space,
+                                                hid_space=hid_space,
+                                                irange=irange, rng=rng,
+                                                init_bias_hid=init_bias_hid)
 
         self.learn_sigma = learn_sigma
         self.init_sigma = init_sigma
@@ -884,7 +859,7 @@ class GaussianBinaryRBM(RBM):
         self.mean_vis = mean_vis
 
         self.energy_function = energy_function_class(
-            transformer = self.transformer,
+            transformer=self.transformer,
             sigma=self.sigma,
             bias_vis=self.bias_vis,
             bias_hid=self.bias_hid
@@ -1005,6 +980,7 @@ class mu_pooled_ssRBM(RBM):
     W        : matrix of shape nvis x nslab, weights of the nslab linear
                filters s.
     """
+
     def __init__(self, nvis, nhid, n_s_per_h,
                  batch_size,
                  alpha0, alpha_irange,
@@ -1077,7 +1053,7 @@ class mu_pooled_ssRBM(RBM):
         h_mean = self.mean_h_given_v(v)
         h_mean_shape = (batch_size, self.nhid)
         h_sample = rng.binomial(size=h_mean_shape,
-                                n = 1, p = h_mean, dtype = h_mean.dtype)
+                                n=1, p=h_mean, dtype=h_mean.dtype)
 
         # sample s given (v,h)
         s_mu, s_var = self.mean_var_s_given_v_h1(v)
@@ -1175,7 +1151,7 @@ def build_stacked_RBM(nvis, nhids, batch_size, vis_type='binary',
         xrange(len(nhids)),
         nhids,
         nviss,
-        )
+    )
     for k, nhid, nvis in seq:
         if k == 0 and vis_type == 'gaussian':
             rbm = GaussianBinaryRBM(nvis=nvis, nhid=nhid,

@@ -63,3 +63,18 @@ def safeUpdate(dict_to, dict_from):
             raise KeyError(key)
         dict_to[key] = val
     return dict_to
+
+
+def safeUnion(a, b):
+    """
+    Does the logic of a union operation without the non-deterministic
+    ordering of python sets
+    """
+    if not isinstance(a, list):
+        raise TypeError("Expected first argument to be a list, but got " + str(type(a)))
+    assert isinstance(b, list)
+    c = []
+    for x in a + b:
+        if x not in c:
+            c.append(x)
+    return c
