@@ -14,7 +14,7 @@ from theano.tensor import nnet
 
 # Local imports
 from base import Block, StackedBlocks
-
+from xylearn.utils import toFloatX, toSharedX, safeUpdate
 from pylearn2.models import Model
 from pylearn2.optimizer import SGDOptimizer
 from pylearn2.expr.basic import theano_norms
@@ -92,7 +92,7 @@ class Sampler(object):
             rng = numpy.random.RandomState(rng)
         seed = int(rng.randint(2 ** 30))
         self.s_rng = RandomStreams(seed)
-        self.particles = sharedX(particles, name='particles')
+        self.particles = toSharedX(particles, name='particles')
 
     def updates(self):
         """
@@ -182,7 +182,7 @@ class BlockGibbsSampler(Sampler):
                     p_max = tensor.cast(p_max, dtype)
                 particles = tensor.clip(particles, p_min, p_max)
         if not hasattr(self.rbm, 'h_sample'):
-            self.rbm.h_sample = sharedX(numpy.zeros((0, 0)), 'h_sample')
+            self.rbm.h_sample = toSharedX(numpy.zeros((0, 0)), 'h_sample')
         return {
             self.particles: particles,
             # TODO: self.rbm.h_sample is never used, why is that here?
@@ -257,7 +257,7 @@ class PersistentCDSampler(Sampler):
                     p_max = tensor.cast(p_max, dtype)
                 particles = tensor.clip(particles, p_min, p_max)
         if not hasattr(self.rbm, 'h_sample'):
-            self.rbm.h_sample = sharedX(numpy.zeros((0, 0)), 'h_sample')
+            self.rbm.h_sample = toSharedX(numpy.zeros((0, 0)), 'h_sample')
         return {
             self.particles: particles,
             # TODO: self.rbm.h_sample is never used, why is that here?
@@ -369,7 +369,7 @@ class RBM(Block, Model):
                         #assert irange == 0.01
                         W = irange * random_patches_src.get_batch_design(nhid).T
 
-                self.transformer = MatrixMul(  sharedX(
+                self.transformer = MatrixMul(  toSharedX(
                     W,
                     name='W',
                     borrow=True
@@ -396,14 +396,14 @@ class RBM(Block, Model):
             b_vis += init_bias_vis
         except ValueError:
             raise ValueError("bad shape or value for init_bias_vis")
-        self.bias_vis = sharedX(b_vis, name='bias_vis', borrow=True)
+        self.bias_vis = toSharedX(b_vis, name='bias_vis', borrow=True)
 
         try:
             b_hid = self.hid_space.get_origin()
             b_hid += init_bias_hid
         except ValueError:
             raise ValueError('bad shape or value for init_bias_hid')
-        self.bias_hid = sharedX(b_hid, name='bias_hid', borrow=True)
+        self.bias_hid = toSharedX(b_hid, name='bias_hid', borrow=True)
 
         self.random_patches_src = random_patches_src
         self.register_names_to_del(['random_patches_src'])
@@ -621,7 +621,7 @@ class RBM(Block, Model):
             Theano symbolic representing stochastic samples from :math:`p(v|h)`
         """
         v_mean = params[0]
-        return as_floatX(rng.uniform(size=shape) < v_mean)
+        return toFloatX(rng.uniform(size=shape) < v_mean)
 
     def input_to_h_from_v(self, v):
         """
@@ -864,7 +864,7 @@ class GaussianBinaryRBM(RBM):
         else:
             base = 1
 
-        self.sigma_driver = sharedX(
+        self.sigma_driver = toSharedX(
             base * init_sigma / self.sigma_lr_scale,
             name='sigma_driver',
             borrow=True
@@ -1025,33 +1025,33 @@ class mu_pooled_ssRBM(RBM):
         alpha_init = numpy.zeros(self.nslab) + alpha0
         if alpha_irange > 0:
             alpha_init += (2 * rng.rand(self.nslab) - 1) * alpha_irange
-        self.log_alpha = sharedX(numpy.log(alpha_init), name='log_alpha')
+        self.log_alpha = toSharedX(numpy.log(alpha_init), name='log_alpha')
         self.alpha = tensor.exp(self.log_alpha)
         self.alpha.name = 'alpha'
 
-        self.mu = sharedX(
+        self.mu = toSharedX(
             numpy.zeros(self.nslab) + mu0,
             name='mu', borrow=True)
-        self.b = sharedX(
+        self.b = toSharedX(
             numpy.zeros(self.nhid) + b0,
             name='b', borrow=True)
 
         if W_irange is None:
             # Derived closed to Xavier Glorot's magic formula
             W_irange = 2 / numpy.sqrt(nvis * nhid)
-        self.W = sharedX(
+        self.W = toSharedX(
             (.5 - rng.rand(self.nvis, self.nslab)) * 2 * W_irange,
             name='W', borrow=True)
 
         # THE BETA IS IGNORED DURING TRAINING - FIXED AT MARGINAL DISTRIBUTION
-        self.B = sharedX(numpy.zeros(self.nvis) + B0, name='B', borrow=True)
+        self.B = toSharedX(numpy.zeros(self.nvis) + B0, name='B', borrow=True)
 
         if Lambda_irange > 0:
             L = (rng.rand(self.nvis, self.nhid) * Lambda_irange
                  + Lambda0)
         else:
             L = numpy.zeros((self.nvis, self.nhid)) + Lambda0
-        self.Lambda = sharedX(L, name='Lambda', borrow=True)
+        self.Lambda = toSharedX(L, name='Lambda', borrow=True)
 
         self._params = [
             self.mu,
