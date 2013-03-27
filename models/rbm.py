@@ -20,21 +20,13 @@ from xylearn.models.baseStructure import Block, StackedBlocks
 from xylearn.models.baseModel import baseModel
 
 from xylearn.optimizers.SGDOptimizer import SGDOptimizer
+from xylearn.samplers.blockGibbsSampler import BlockGibbsSampler
 
 from xylearn.expr.theanoEXPR import inverse_sigmoid
 
-
-from pylearn2.space import VectorSpace
+from xylearn.space import VectorSpace
 
 theano.config.warn.sum_div_dimshuffle_bug = False
-
-if 0:
-    print 'WARNING: using SLOW rng'
-    RandomStreams = tensor.shared_randomstreams.RandomStreams
-else:
-    import theano.sandbox.rng_mrg
-
-    RandomStreams = theano.sandbox.rng_mrg.MRG_RandomStreams
 
 
 def training_updates(visible_batch, model, sampler, optimizer):
@@ -70,211 +62,6 @@ def training_updates(visible_batch, model, sampler, optimizer):
     return ups
 
 
-class Sampler(object):
-    """
-    A sampler is responsible for implementing a sampling strategy on top of
-    an RBM, which may include retaining state e.g. the negative particles for
-    Persistent Contrastive Divergence.
-    """
-
-    def __init__(self, rbm, particles, rng):
-        """
-        Construct a Sampler.
-
-        Parameters
-        ----------
-        rbm : object
-            An instance of `RBM` or a derived class, or one implementing
-            the `gibbs_step_for_v` interface.
-        particles : ndarray
-            An initial state for the set of persistent Narkov chain particles
-            that will be updated at every step of learning.
-        rng : RandomState object
-            NumPy random number generator object used to initialize a
-            RandomStreams object used in training.
-        """
-        self.__dict__.update(rbm=rbm)
-        if not hasattr(rng, 'randn'):
-            rng = numpy.random.RandomState(rng)
-        seed = int(rng.randint(2 ** 30))
-        self.s_rng = RandomStreams(seed)
-        self.particles = toSharedX(particles, name='particles')
-
-    def updates(self):
-        """
-        Get the dictionary of updates for the sampler's persistent state
-        at each step.
-
-        Returns
-        -------
-        updates : dict
-            Dictionary with shared variable instances as keys and symbolic
-            expressions indicating how they should be updated as values.
-
-        Notes
-        -----
-        In the `Sampler` base class, this is simply a stub.
-        """
-        raise NotImplementedError()
-
-
-class BlockGibbsSampler(Sampler):
-    """
-
-    Implements a persistent Markov chain based on block gibbs sampling
-    for use with Persistent Contrastive
-    Divergence, a.k.a. stochastic maximum likelhiood, as described in [1].
-
-    .. [1] T. Tieleman. "Training Restricted Boltzmann Machines using
-       approximations to the likelihood gradient". Proceedings of the 25th
-       International Conference on Machine Learning, Helsinki, Finland,
-       2008. http://www.cs.toronto.edu/~tijmen/pcd/pcd.pdf
-    """
-
-    def __init__(self, rbm, particles, rng, steps=1, particles_clip=None):
-        """
-        Construct a BlockGibbsSampler.
-
-        Parameters
-        ----------
-        rbm : object
-            An instance of `RBM` or a derived class, or one implementing
-            the `gibbs_step_for_v` interface.
-        particles : ndarray
-            An initial state for the set of persistent Markov chain particles
-            that will be updated at every step of learning.
-        rng : RandomState object
-            NumPy random number generator object used to initialize a
-            RandomStreams object used in training.
-        steps : int, optional
-            Number of Gibbs steps to run the Markov chain for at each
-            iteration.
-        particles_clip: None or (min, max) pair
-            The values of the returned particles will be clipped between
-            min and max.
-        """
-        super(BlockGibbsSampler, self).__init__(rbm, particles, rng)
-        self.steps = steps
-        self.particles_clip = particles_clip
-
-    def updates(self, particles_clip=None):
-        """
-        Get the dictionary of updates for the sampler's persistent state
-        at each step..
-
-        Returns
-        -------
-        updates : dict
-            Dictionary with shared variable instances as keys and symbolic
-            expressions indicating how they should be updated as values.
-        """
-        steps = self.steps
-        particles = self.particles
-        # TODO: do this with scan?
-        for i in xrange(steps):
-            particles, _locals = self.rbm.gibbs_step_for_v(
-                particles,
-                self.s_rng
-            )
-            assert particles.type.dtype == self.particles.type.dtype
-            if self.particles_clip is not None:
-                p_min, p_max = self.particles_clip
-                # The clipped values should still have the same type
-                dtype = particles.dtype
-                p_min = tensor.as_tensor_variable(p_min)
-                if p_min.dtype != dtype:
-                    p_min = tensor.cast(p_min, dtype)
-                p_max = tensor.as_tensor_variable(p_max)
-                if p_max.dtype != dtype:
-                    p_max = tensor.cast(p_max, dtype)
-                particles = tensor.clip(particles, p_min, p_max)
-        if not hasattr(self.rbm, 'h_sample'):
-            self.rbm.h_sample = toSharedX(numpy.zeros((0, 0)), 'h_sample')
-        return {
-            self.particles: particles,
-            # TODO: self.rbm.h_sample is never used, why is that here?
-            # Moreover, it does not make sense for things like ssRBM.
-            self.rbm.h_sample: _locals['h_mean']
-        }
-
-
-class PersistentCDSampler(Sampler):
-    """
-        Implements a persistent Markov chain for use with Persistent Contrastive
-        Divergence, a.k.a. stochastic maximum likelhiood, as described in [1].
-        
-        .. [1] T. Tieleman. "Training Restricted Boltzmann Machines using
-        approximations to the likelihood gradient". Proceedings of the 25th
-        International Conference on Machine Learning, Helsinki, Finland,
-        2008. http://www.cs.toronto.edu/~tijmen/pcd/pcd.pdf
-        """
-
-    def __init__(self, rbm, particles, rng, steps=1, particles_clip=None):
-        """
-            Construct a PersistentCDSampler.
-            
-            Parameters
-            ----------
-            rbm : object
-            An instance of `RBM` or a derived class, or one implementing
-            the `gibbs_step_for_v` interface.
-            particles : ndarray
-            An initial state for the set of persistent Markov chain particles
-            that will be updated at every step of learning.
-            rng : RandomState object
-            NumPy random number generator object used to initialize a
-            RandomStreams object used in training.
-            steps : int, optional
-            Number of Gibbs steps to run the Markov chain for at each
-            iteration.
-            particles_clip: None or (min, max) pair
-            The values of the returned particles will be clipped between
-            min and max.
-            """
-        super(PersistentCDSampler, self).__init__(rbm, particles, rng)
-        self.steps = steps
-        self.particles_clip = particles_clip
-
-    def updates(self, particles_clip=None):
-        """
-            Get the dictionary of updates for the sampler's persistent state
-            at each step..
-            
-            Returns
-            -------
-            updates : dict
-            Dictionary with shared variable instances as keys and symbolic
-            expressions indicating how they should be updated as values.
-            """
-        steps = self.steps
-        particles = self.particles
-        # TODO: do this with scan?
-        for i in xrange(steps):
-            particles, _locals = self.rbm.gibbs_step_for_v(
-                particles,
-                self.s_rng
-            )
-            if self.particles_clip is not None:
-                p_min, p_max = self.particles_clip
-                # The clipped values should still have the same type
-                dtype = particles.dtype
-                p_min = tensor.as_tensor_variable(p_min)
-                if p_min.dtype != dtype:
-                    p_min = tensor.cast(p_min, dtype)
-                p_max = tensor.as_tensor_variable(p_max)
-                if p_max.dtype != dtype:
-                    p_max = tensor.cast(p_max, dtype)
-                particles = tensor.clip(particles, p_min, p_max)
-        if not hasattr(self.rbm, 'h_sample'):
-            self.rbm.h_sample = toSharedX(numpy.zeros((0, 0)), 'h_sample')
-        return {
-            self.particles: particles,
-            # TODO: self.rbm.h_sample is never used, why is that here?
-            # Moreover, it does not make sense for things like ssRBM.
-            self.rbm.h_sample: _locals['h_mean']
-        }
-
-
 class RBM(Block, baseModel):
     """
     A base interface for RBMs, implementing the binary-binary case.
@@ -282,15 +69,16 @@ class RBM(Block, baseModel):
     """
 
     def __init__(self,
-                 nvis=None, nhid=None,
+                 nvis=None,
+                 nhid=None,
                  vis_space=None,
                  hid_space=None,
                  transformer=None,
                  irange=0.5, rng=None, init_bias_vis=None,
                  init_bias_vis_marginals=None, init_bias_hid=0.0,
-                 base_lr=1e-3,
-                 anneal_start=None, nchains=100, sml_gibbs_steps=1,
-                 random_patches_src=None):
+                 base_lr=1e-3, anneal_start=None, nchains=100, sml_gibbs_steps=1,
+                 random_patches_src=None,
+                 monitor_reconstruction=False):
 
         """
         Construct an RBM object.
@@ -300,15 +88,15 @@ class RBM(Block, baseModel):
         nvis : int
             Number of visible units in the model.
             (Specifying this implies that the model acts on a vector,
-            i.e. it sets vis_space = pylearn2.space.VectorSpace(nvis) )
+            i.e. it sets vis_space = xylearn.space.VectorSpace(nvis) )
         nhid : int
             Number of hidden units in the model.
             (Specifying this implies that the model acts on a vector)
         vis_space:
-            A pylearn2.space.Space object describing what kind of vector
+            A xylearn.space.Space object describing what kind of vector
             space the RBM acts on. Don't specify if you used nvis / hid
         hid_space:
-            A pylearn2.space.Space object describing what kind of vector
+            A xylearn.space.Space object describing what kind of vector
             space the RBM's hidden units live in. Don't specify if you used
             nvis / nhid
         init_bias_vis_marginals: either None, or a Dataset to use to initialize
@@ -322,6 +110,10 @@ class RBM(Block, baseModel):
             Initial value of the visible biases, broadcasted as necessary.
         init_bias_hid : array_like, optional
             initial value of the hidden biases, broadcasted as necessary.
+        monitor_reconstruction : if True, will request a monitoring channel to monitor
+            reconstruction error
+        random_patches_src: Either None, or a Dataset from which to draw random patches
+            in order to initialize the weights. Patches will be multiplied by irange
 
         Parameters for default SML learning rule:
 
@@ -332,8 +124,8 @@ class RBM(Block, baseModel):
 
         """
 
-        Block.__init__(self)
         baseModel.__init__(self)
+        Block.__init__(self)
 
         if init_bias_vis_marginals is not None:
             assert init_bias_vis is None
@@ -358,18 +150,42 @@ class RBM(Block, baseModel):
             #if we don't specify things in terms of spaces and a transformer,
             #assume dense matrix multiplication and work off of nvis, nhid
             assert hid_space is None
+            assert transformer is None or isinstance(transformer, MatrixMul)
             assert nvis is not None
             assert nhid is not None
+
+            if transformer is None:
+                if random_patches_src is None:
+                    W = rng.uniform(-irange, irange, (nvis, nhid))
+                else:
+                    if hasattr(random_patches_src, '__array__'):
+                        W = irange * random_patches_src.T
+                        assert W.shape == (nvis, nhid)
+                    else:
+                        #assert type(irange) == type(0.01)
+                        #assert irange == 0.01
+                        W = irange * random_patches_src.get_batch_design(nhid).T
+
+                self.transformer = MatrixMul(toSharedX(
+                    W,
+                    name='W',
+                    borrow=True
+                )
+                )
+            else:
+                self.transformer = transformer
 
             self.vis_space = VectorSpace(nvis)
             self.hid_space = VectorSpace(nhid)
         else:
             assert hid_space is not None
+            assert transformer is not None
             assert nvis is None
             assert nhid is None
 
             self.vis_space = vis_space
             self.hid_space = hid_space
+            self.transformer = transformer
 
         try:
             b_vis = self.vis_space.get_origin()
@@ -389,7 +205,7 @@ class RBM(Block, baseModel):
         self.register_names_to_del(['random_patches_src'])
 
         self.__dict__.update(nhid=nhid, nvis=nvis)
-        self._params = safeUnion(transformer.get_params(), [self.bias_vis, self.bias_hid])
+        self._params = safe_union(self.transformer.get_params(), [self.bias_vis, self.bias_hid])
 
         self.base_lr = base_lr
         self.anneal_start = anneal_start
